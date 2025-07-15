@@ -640,8 +640,9 @@ async def delete_rack_confirm(update: Update, context):
         except Exception as e:
             logger.error(f"Gagal menghapus rak di toko {store_code}: {e}")
             await query.message.reply_text("Terjadi kesalahan saat menghapus rak. Silakan coba lagi.")
-        finally: # Ini adalah blok finally yang hilang
-            pass # Tidak ada cleanup spesifik di sini, hanya untuk memenuhi sintaks
+        finally:
+            # Tidak ada cleanup spesifik di sini, hanya untuk memastikan blok try ditutup dengan benar
+            pass 
     else:
         await query.message.reply_text("Batal Menghapus Rak")
 
@@ -735,7 +736,6 @@ async def add_plu_input_data(update: Update, context):
     rack_name = context.user_data.get("selected_rack_add_plu")
     chat_id = update.effective_chat.id
 
-    
     try:
         if not store_code or not rack_name:
             await update.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan dalam konteks.")
@@ -1024,7 +1024,6 @@ async def delete_plu_confirm(update: Update, context):
             await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
-        
         try:
             worksheet = spreadsheet.worksheet(store_code)
             named_ranges = worksheet.get_named_ranges()
@@ -1065,8 +1064,6 @@ async def delete_plu_confirm(update: Update, context):
                 if plu_in_row in plu_list_to_delete:
                     plu_found_and_deleted.append(plu_in_row)
                     rows_to_clear_indices.append(i) # Mark for clearing
-                # else: # Baris ini tidak diperlukan karena updated_data_rows tidak digunakan
-                #     updated_data_rows.append(row)
 
             # Identify PLUs that were requested but not found
             for requested_plu in plu_list_to_delete:
@@ -1098,8 +1095,9 @@ async def delete_plu_confirm(update: Update, context):
         except Exception as e:
             logger.error(f"Gagal menghapus PLU di rak {rack_name} toko {store_code}: {e}")
             await query.message.reply_text("Terjadi kesalahan saat menghapus PLU. Silakan coba lagi.")
-        finally: # Ini adalah blok finally yang hilang yang menyebabkan SyntaxError
-            pass # Tidak ada cleanup spesifik di sini, hanya untuk memenuhi sintaks Python
+        finally:
+            # Pastikan blok finally selalu ada untuk menutup try dengan benar
+            pass 
     else:
         await query.message.reply_text("Batal Menghapus Plu")
 
