@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 
 # --- BAGIAN 1: KONFIGURASI ---
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://google.com") # Default URL jika tidak diatur
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://telegram.org")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 GSPREAD_CREDENTIALS = os.environ.get("GSPREAD_CREDENTIALS")
 
@@ -17,20 +17,16 @@ if not all([TOKEN, SPREADSHEET_ID, GSPREAD_CREDENTIALS]):
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- BAGIAN 2: FUNGSI HELPER ---
-# (Semua fungsi helper dari jawaban sebelumnya yang sudah benar dan lengkap)
+# --- BAGIAN 2: FUNGSI HELPER (LENGKAP DAN BENAR) ---
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_formatting import *
 
 def get_gspread_client():
-    creds_dict = json.loads(GSPREAD_CREDENTIALS)
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
+    creds_dict = json.loads(GSPREAD_CREDENTIALS); scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope); return gspread.authorize(creds)
 def find_next_available_row(worksheet):
-    all_values = worksheet.get_all_values()
-    return 1 if not all_values else len(all_values) + 4
+    all_values = worksheet.get_all_values(); return 1 if not all_values else len(all_values) + 4
 def _to_safe_name(name): return name.replace(" ", "_")
 def _to_real_name(safe_name): return safe_name.replace("_", " ")
 
@@ -51,7 +47,6 @@ def add_new_store_and_produk_sheet(store_code):
 def delete_store_sheet(store_code):
     try: client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID); spreadsheet.del_worksheet(spreadsheet.worksheet(store_code)); return True
     except Exception as e: logger.error(f"Error delete_store_sheet: {e}"); return False
-
 def get_racks_in_sheet(store_code):
     try:
         client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID)
@@ -79,179 +74,203 @@ def add_new_rack(store_code, rack_name):
         spreadsheet.add_named_range(f"'{store_code}'!A{data_start_row}:A", safe_rack_name)
         return True
     except Exception as e: logger.error(f"Error add_new_rack for '{rack_name}': {e}"); return False
-def delete_racks(store_code, racks_to_delete):
-    deleted, not_found = [], []
+def delete_racks(store_code, rack_name):
     try:
         client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID)
         all_named_ranges = spreadsheet.list_named_ranges()
-        for rack in racks_to_delete:
-            safe_rack_name = _to_safe_name(rack)
-            found = False
-            for nr in all_named_ranges:
-                if nr.get('name') == safe_rack_name:
-                    spreadsheet.delete_named_range(nr['namedRangeId'])
-                    deleted.append(rack); found = True; break
-            if not found: not_found.append(rack)
-        return deleted, not_found
-    except Exception as e: logger.error(f"Error delete_racks: {e}"); return [], racks_to_delete
+        safe_rack_name = _to_safe_name(rack_name)
+        for nr in all_named_ranges:
+            if nr.get('name') == safe_rack_name and nr.get('rangeName', '').startswith(f"'{store_code}'!"):
+                spreadsheet.delete_named_range(nr['namedRangeId'])
+                return True
+        return False
+    except Exception as e: logger.error(f"Error delete_racks: {e}"); return False
 
-# --- BAGIAN 3: KEYBOARDS ---
+# --- BAGIAN 3: KEYBOARDS (DIKEMBALIKAN SEMUA TOMBOL) ---
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [InlineKeyboardButton("Tambah Toko", callback_data="add_store"), InlineKeyboardButton("Hapus Toko", callback_data="del_store_ask_sheet")],
+        [InlineKeyboardButton("Tambah Toko", callback_data="add_store_start"), InlineKeyboardButton("Hapus Toko", callback_data="del_store_ask_sheet")],
         [InlineKeyboardButton("Tambah Rak", callback_data="add_rack_ask_sheet"), InlineKeyboardButton("Hapus Rak", callback_data="del_rack_ask_sheet")],
-        # [InlineKeyboardButton("Tambah Plu", callback_data="add_plu_ask_sheet"), InlineKeyboardButton("Hapus Plu", callback_data="del_plu_ask_sheet")], # Sementara dinonaktifkan
+        [InlineKeyboardButton("Tambah Plu", callback_data="add_plu_ask_sheet"), InlineKeyboardButton("Hapus Plu", callback_data="del_plu_ask_sheet")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def build_dynamic_keyboard(prefix, items):
+def build_dynamic_keyboard(prefix, items, include_back_button=True):
     keyboard = [InlineKeyboardButton(item, callback_data=f"{prefix}_{_to_safe_name(item)}") for item in items]
-    keyboard.append(InlineKeyboardButton("<< Kembali", callback_data="start_over"))
+    if include_back_button:
+        return InlineKeyboardMarkup.from_row(keyboard + [InlineKeyboardButton("<< Kembali", callback_data="start_over")], width=2)
     return InlineKeyboardMarkup.from_row(keyboard, width=2)
 
-# --- BAGIAN 4: HANDLERS ---
-AWAIT_INPUT = 1
+# --- BAGIAN 4: HANDLERS (STRUKTUR DIPERBAIKI TOTAL) ---
+AWAIT_STORE_CODE, AWAIT_RACK_NAME = range(2)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menampilkan menu utama."""
-    await update.message.reply_text("Silakan pilih salah satu opsi:", reply_markup=main_menu_keyboard())
+    message = update.message or update.callback_query.message
+    await message.reply_text("Silakan pilih salah satu opsi:", reply_markup=main_menu_keyboard())
+    # Akhiri percakapan apa pun yang mungkin sedang berjalan
+    if 'current_conversation' in context.user_data:
+        del context.user_data['current_conversation']
     return ConversationHandler.END
 
 async def start_over(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Kembali ke menu utama dari callback."""
+    """Kembali ke menu utama dari callback, membersihkan state."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Silakan pilih salah satu opsi:", reply_markup=main_menu_keyboard())
+    # Akhiri percakapan apa pun yang mungkin sedang berjalan
+    if 'current_conversation' in context.user_data:
+        del context.user_data['current_conversation']
     return ConversationHandler.END
 
 # Alur Tambah Toko
-async def add_store_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_store_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    context.user_data['next_action'] = 'add_store_final'
     await query.edit_message_text("Masukkan Kode Toko baru (4 digit alfanumerik):")
-    return AWAIT_INPUT
+    return AWAIT_STORE_CODE
+
+async def add_store_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    store_code = update.message.text.upper()
+    if len(store_code) != 4 or not store_code.isalnum():
+        await update.message.reply_text("Input tidak valid. Kode Toko harus 4 digit alfanumerik. Coba lagi:")
+        return AWAIT_STORE_CODE # Tetap di state yang sama untuk input ulang
+    
+    if add_new_store_and_produk_sheet(store_code):
+        await update.message.reply_text(f"Berhasil menambah toko '{store_code}'.", reply_markup=main_menu_keyboard())
+    else:
+        await update.message.reply_text(f"Toko '{store_code}' sudah ada.", reply_markup=main_menu_keyboard())
+    return ConversationHandler.END
 
 # Alur Hapus Toko
 async def del_store_ask_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     stores = get_all_valid_stores()
     if not stores:
         await query.edit_message_text("Tidak ada toko untuk dihapus.", reply_markup=main_menu_keyboard())
-        return ConversationHandler.END
+        return
     keyboard = build_dynamic_keyboard("del_store_confirm", stores)
     await query.edit_message_text("Pilih toko yang akan dihapus:", reply_markup=keyboard)
 
 async def del_store_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    safe_store_name = query.data.split('_')[-1]
-    store_name = _to_real_name(safe_store_name)
+    query = update.callback_query; await query.answer()
+    store_name = _to_real_name(query.data.split('_')[-1])
     context.user_data['store_to_delete'] = store_name
     keyboard = InlineKeyboardMarkup.from_row([
         InlineKeyboardButton("YA, HAPUS", callback_data="del_store_final_yes"),
-        InlineKeyboardButton("TIDAK", callback_data="start_over")
-    ])
-    await query.edit_message_text(f"Apakah Anda yakin ingin menghapus toko '{store_name}'?", reply_markup=keyboard)
+        InlineKeyboardButton("TIDAK", callback_data="start_over")])
+    await query.edit_message_text(f"Yakin ingin menghapus toko '{store_name}'?", reply_markup=keyboard)
 
 async def del_store_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     store_name = context.user_data.pop('store_to_delete', None)
     if store_name and delete_store_sheet(store_name):
         await query.edit_message_text(f"Toko '{store_name}' berhasil dihapus.", reply_markup=main_menu_keyboard())
     else:
-        await query.edit_message_text(f"Gagal menghapus toko.", reply_markup=main_menu_keyboard())
-    return ConversationHandler.END
+        await query.edit_message_text("Gagal menghapus toko.", reply_markup=main_menu_keyboard())
 
 # Alur Tambah Rak
 async def add_rack_ask_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     stores = get_all_valid_stores()
     if not stores:
-        await query.edit_message_text("Tidak ada toko. Silakan buat toko terlebih dahulu.", reply_markup=main_menu_keyboard())
-        return ConversationHandler.END
+        await query.edit_message_text("Buat toko terlebih dahulu.", reply_markup=main_menu_keyboard()); return
     keyboard = build_dynamic_keyboard("add_rack_ask_name", stores)
     await query.edit_message_text("Pilih toko untuk menambahkan rak:", reply_markup=keyboard)
 
-async def add_rack_ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    safe_store_name = query.data.split('_')[-1]
-    context.user_data['store_for_rack'] = _to_real_name(safe_store_name)
-    context.user_data['next_action'] = 'add_rack_final'
-    await query.edit_message_text("Masukkan nama Rak baru (bisa dengan spasi). Untuk >1, pisahkan dengan koma.")
-    return AWAIT_INPUT
+async def add_rack_ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query; await query.answer()
+    context.user_data['store_for_rack'] = _to_real_name(query.data.split('_')[-1])
+    await query.edit_message_text("Masukkan nama Rak baru.\nUntuk >1, pisahkan dengan koma.")
+    return AWAIT_RACK_NAME
 
-# Handler Umum untuk Input Teks
-async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action = context.user_data.pop('next_action', None)
-    text = update.message.text
+async def add_rack_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    store_name = context.user_data.pop('store_for_rack', None)
+    if not store_name:
+        await update.message.reply_text("Sesi berakhir, silakan ulangi.", reply_markup=main_menu_keyboard())
+        return ConversationHandler.END
     
-    if action == 'add_store_final':
-        store_code = text.upper()
-        if len(store_code) != 4 or not store_code.isalnum():
-            await update.message.reply_text("Input tidak valid. Kode Toko harus 4 digit alfanumerik. Coba lagi:")
-            context.user_data['next_action'] = 'add_store_final' # Set ulang aksi
-            return AWAIT_INPUT
-        if add_new_store_and_produk_sheet(store_code):
-            await update.message.reply_text(f"Berhasil menambah toko '{store_code}'.", reply_markup=main_menu_keyboard())
-        else:
-            await update.message.reply_text(f"Toko '{store_code}' sudah ada.", reply_markup=main_menu_keyboard())
+    rack_names = [name.strip() for name in update.message.text.split(',') if name.strip()]
+    added, existed = [], []
+    for name in rack_names:
+        if add_new_rack(store_name, name): added.append(name)
+        else: existed.append(name)
     
-    elif action == 'add_rack_final':
-        store_name = context.user_data.pop('store_for_rack', None)
-        if not store_name:
-            await update.message.reply_text("Sesi berakhir. Silakan ulangi.", reply_markup=main_menu_keyboard())
-            return ConversationHandler.END
-        
-        rack_names = [name.strip() for name in text.split(',') if name.strip()]
-        added, existed = [], []
-        for name in rack_names:
-            if add_new_rack(store_name, name):
-                added.append(name)
-            else:
-                existed.append(name)
-        
-        parts = []
-        if added: parts.append(f"Berhasil menambah rak: {', '.join(added)} di toko {store_name}.")
-        if existed: parts.append(f"Rak sudah ada: {', '.join(existed)}.")
-        await update.message.reply_text("\n".join(parts) or "Tidak ada rak ditambahkan.", reply_markup=main_menu_keyboard())
-
-    else:
-        await update.message.reply_text("Silakan pilih salah satu opsi dari menu.", reply_markup=main_menu_keyboard())
-
+    parts = [f"Berhasil: {', '.join(added)}." if added else "", f"Sudah ada: {', '.join(existed)}." if existed else ""]
+    await update.message.reply_text(f"Di toko {store_name}:\n" + ("\n".join(filter(None, parts)) or "Tidak ada rak ditambahkan."), reply_markup=main_menu_keyboard())
     return ConversationHandler.END
+
+# Alur Hapus Rak
+async def del_rack_ask_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    stores = get_all_valid_stores()
+    if not stores:
+        await query.edit_message_text("Buat toko terlebih dahulu.", reply_markup=main_menu_keyboard()); return
+    keyboard = build_dynamic_keyboard("del_rack_ask_rack", stores)
+    await query.edit_message_text("Pilih toko untuk menghapus rak:", reply_markup=keyboard)
+
+async def del_rack_ask_rack(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    store_name = _to_real_name(query.data.split('_')[-1])
+    context.user_data['store_for_del_rack'] = store_name
+    racks = get_racks_in_sheet(store_name)
+    if not racks:
+        await query.edit_message_text(f"Tidak ada rak di toko '{store_name}'.", reply_markup=main_menu_keyboard()); return
+    keyboard = build_dynamic_keyboard(f"del_rack_confirm_{_to_safe_name(store_name)}", racks)
+    await query.edit_message_text(f"Pilih rak yang akan dihapus dari toko '{store_name}':", reply_markup=keyboard)
+
+async def del_rack_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    parts = query.data.split('_')
+    store_name = _to_real_name(parts[3])
+    rack_name = _to_real_name(parts[4])
+    context.user_data['rack_to_delete'] = {'store': store_name, 'rack': rack_name}
+    keyboard = InlineKeyboardMarkup.from_row([
+        InlineKeyboardButton("YA, HAPUS", callback_data="del_rack_final_yes"),
+        InlineKeyboardButton("TIDAK", callback_data="start_over")])
+    await query.edit_message_text(f"Yakin ingin menghapus rak '{rack_name}' dari toko '{store_name}'?", reply_markup=keyboard)
+
+async def del_rack_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    data = context.user_data.pop('rack_to_delete', None)
+    if data and delete_racks(data['store'], [data['rack']]):
+        await query.edit_message_text(f"Rak '{data['rack']}' berhasil dihapus.", reply_markup=main_menu_keyboard())
+    else:
+        await query.edit_message_text("Gagal menghapus rak.", reply_markup=main_menu_keyboard())
 
 # --- BAGIAN 5: MAIN ---
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
     
-    # Conversation handler sederhana untuk menangani input teks
+    # Conversation handler untuk menangani input teks yang memerlukan state
     conv_handler = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(add_store_start, pattern="^add_store$"),
+            CallbackQueryHandler(add_store_start, pattern="^add_store_start$"),
             CallbackQueryHandler(add_rack_ask_name, pattern="^add_rack_ask_name_"),
         ],
         states={
-            AWAIT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input)],
+            AWAIT_STORE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_store_received)],
+            AWAIT_RACK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_rack_received)],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CallbackQueryHandler(start_over, pattern="^start_over$")],
     )
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(start_over, pattern="^start_over$"))
+    # Daftarkan semua handler callback yang tidak memerlukan state
     application.add_handler(CallbackQueryHandler(del_store_ask_sheet, pattern="^del_store_ask_sheet$"))
     application.add_handler(CallbackQueryHandler(del_store_confirm, pattern="^del_store_confirm_"))
     application.add_handler(CallbackQueryHandler(del_store_final, pattern="^del_store_final_yes$"))
     application.add_handler(CallbackQueryHandler(add_rack_ask_sheet, pattern="^add_rack_ask_sheet$"))
+    application.add_handler(CallbackQueryHandler(del_rack_ask_sheet, pattern="^del_rack_ask_sheet$"))
+    application.add_handler(CallbackQueryHandler(del_rack_ask_rack, pattern="^del_rack_ask_rack_"))
+    application.add_handler(CallbackQueryHandler(del_rack_confirm, pattern=r"^del_rack_confirm_"))
+    application.add_handler(CallbackQueryHandler(del_rack_final, pattern="^del_rack_final_yes$"))
     
+    # Tambahkan handler utama
     application.add_handler(conv_handler)
     
-    # Jalankan sebagai Background Worker (tanpa Flask/Gunicorn)
     logger.info("Bot sedang berjalan dengan polling...")
     application.run_polling()
 
