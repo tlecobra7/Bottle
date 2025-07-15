@@ -19,9 +19,10 @@ from telegram.ext import (
 )
 
 # Konfigurasi Bot
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") # Gunakan environment variable atau fallback ke nilai default
-WEB_APP_URL = os.getenv("WEB_APP_URL") # Gunakan environment variable atau fallback ke nilai default
-SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID") # Gunakan environment variable atau fallback ke nilai default
+# Disarankan untuk menghapus nilai default token asli sebelum push ke repo publik
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "DUMMY_TOKEN_GANTI_DENGAN_ASLI_DI_ENV") # Ganti dengan string dummy
+WEB_APP_URL = os.getenv("WEB_APP_URL", "https://tlestore.fwh.is/index.php")
+SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID", "1V1l1TvuDC7uxhRHqH-MltLt1QfSO9U5wFQYdP10kCdo")
 
 # Konfigurasi Google Sheets API
 # Disarankan untuk menyimpan kredensial sebagai environment variable di Render
@@ -133,69 +134,8 @@ def clear_previous_message(func):
         return await func(update, context, *args, **kwargs)
     return wrapper
 
-# --- Bot Commands and Handlers ---
-
-@clear_previous_message
-async def start(update: Update, context):
-    """Menangani perintah /start dan menampilkan menu utama."""
-    keyboard = [
-        [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [
-            InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-            InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-            InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-            InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Selamat Datang di Bot PJR by Edp Toko", reply_markup=reply_markup
-    )
-    return ConversationHandler.END # Akhiri konversasi sebelumnya jika ada
-
-@clear_previous_message
-async def invalid_input(update: Update, context):
-    """Menangani input teks yang tidak diharapkan."""
-    await update.message.reply_text("Data Salah, Harap Pilih Dari Menu")
-    # Kembali ke menu utama
-    keyboard = [
-        [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [
-            InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-            InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-            InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-            InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Silahkan pilih opsi dari menu:", reply_markup=reply_markup
-    )
-    return ConversationHandler.END
-
-@clear_previous_message
-async def cancel_action(update: Update, context):
-    """Membatalkan operasi saat ini."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-        await query.edit_message_text("Operasi dibatalkan.")
-    else:
-        await update.message.reply_text("Operasi dibatalkan.")
-
-    # Kembali ke menu utama
+async def _return_to_main_menu(context, chat_id):
+    """Helper untuk menampilkan menu utama."""
     keyboard = [
         [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
         [
@@ -213,10 +153,40 @@ async def cancel_action(update: Update, context):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
-        chat_id=update.effective_chat.id,
+        chat_id=chat_id,
         text="Silahkan pilih opsi dari menu:",
         reply_markup=reply_markup,
     )
+
+# --- Bot Commands and Handlers ---
+
+@clear_previous_message
+async def start(update: Update, context):
+    """Menangani perintah /start dan menampilkan menu utama."""
+    chat_id = update.effective_chat.id
+    await _return_to_main_menu(context, chat_id)
+    return ConversationHandler.END # Akhiri konversasi sebelumnya jika ada
+
+@clear_previous_message
+async def invalid_input(update: Update, context):
+    """Menangani input teks yang tidak diharapkan."""
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("Data Salah, Harap Pilih Dari Menu")
+    await _return_to_main_menu(context, chat_id)
+    return ConversationHandler.END
+
+@clear_previous_message
+async def cancel_action(update: Update, context):
+    """Membatalkan operasi saat ini."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    if query:
+        await query.answer()
+        await query.edit_message_text("Operasi dibatalkan.")
+    else:
+        await update.message.reply_text("Operasi dibatalkan.")
+
+    await _return_to_main_menu(context, chat_id)
     return ConversationHandler.END
 
 # --- Tambah Toko Handlers ---
@@ -236,16 +206,17 @@ async def add_store_code(update: Update, context):
     store_code = update.message.text.strip().upper()
     chat_id = update.effective_chat.id
 
-    if not re.fullmatch(r'^[A-Z0-9]{4}$', store_code):
-        await update.message.reply_text("Kode Toko Harus 4 Digit")
-        return ADD_STORE_CODE # Tetap di state ini
-
-    spreadsheet = get_spreadsheet()
-    if not spreadsheet:
-        await update.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
-        return ConversationHandler.END
-
     try:
+        if not re.fullmatch(r'^[A-Z0-9]{4}$', store_code):
+            await update.message.reply_text("Kode Toko Harus 4 Digit")
+            return ADD_STORE_CODE # Tetap di state ini
+
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            await update.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+            await _return_to_main_menu(context, chat_id)
+            return ConversationHandler.END
+
         existing_sheets = get_all_sheet_titles(spreadsheet)
         if store_code in existing_sheets:
             await update.message.reply_text(f"Nama {store_code} Sudah Ada")
@@ -253,34 +224,13 @@ async def add_store_code(update: Update, context):
         else:
             spreadsheet.add_worksheet(title=store_code, rows=100, cols=20)
             await update.message.reply_text(f"Berhasil Menambahkan {store_code}")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
     except Exception as e:
         logger.error(f"Gagal menambahkan toko: {e}")
         await update.message.reply_text("Terjadi kesalahan saat menambahkan toko. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
-    finally:
-        # Kembali ke menu utama setelah operasi selesai
-        keyboard = [
-            [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-            [
-                InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-                InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-            ],
-            [
-                InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-                InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-            ],
-            [
-                InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-                InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Silahkan pilih opsi dari menu:",
-            reply_markup=reply_markup,
-        )
 
 # --- Hapus Toko Handlers ---
 
@@ -289,15 +239,18 @@ async def delete_store_start(update: Update, context):
     """Memulai proses penghapusan toko."""
     query = update.callback_query
     await query.answer()
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     sheet_titles = get_filtered_sheet_titles(spreadsheet)
     if not sheet_titles:
         await query.message.reply_text("Tidak ada kode toko yang tersedia untuk dihapus.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     buttons = [InlineKeyboardButton(title, callback_data=f"select_store_delete_{title}") for title in sheet_titles]
@@ -312,6 +265,7 @@ async def delete_store_select(update: Update, context):
     await query.answer()
     store_code = query.data.replace("select_store_delete_", "")
     context.user_data["store_to_delete"] = store_code
+    chat_id = update.effective_chat.id
 
     keyboard = [
         [
@@ -339,11 +293,13 @@ async def delete_store_confirm(update: Update, context):
         store_code = context.user_data.get("store_to_delete")
         if not store_code:
             await query.message.reply_text("Kesalahan: Kode toko tidak ditemukan.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         spreadsheet = get_spreadsheet()
         if not spreadsheet:
             await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         try:
@@ -359,28 +315,7 @@ async def delete_store_confirm(update: Update, context):
         await query.message.reply_text("Batal Menghapus Kode Toko")
 
     context.user_data.pop("store_to_delete", None)
-    # Kembali ke menu utama setelah operasi selesai
-    keyboard = [
-        [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [
-            InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-            InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-            InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-            InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Silahkan pilih opsi dari menu:",
-        reply_markup=reply_markup,
-    )
+    await _return_to_main_menu(context, chat_id)
     return ConversationHandler.END
 
 # --- Tambah Rak Handlers ---
@@ -390,15 +325,18 @@ async def add_rack_start(update: Update, context):
     """Memulai proses penambahan rak."""
     query = update.callback_query
     await query.answer()
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     sheet_titles = get_filtered_sheet_titles(spreadsheet)
     if not sheet_titles:
         await query.message.reply_text("Tidak ada kode toko yang tersedia untuk ditambahkan rak.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     buttons = [InlineKeyboardButton(title, callback_data=f"select_store_add_rack_{title}") for title in sheet_titles]
@@ -413,10 +351,12 @@ async def add_rack_select_store(update: Update, context):
     await query.answer()
     store_code = query.data.replace("select_store_add_rack_", "")
     context.user_data["selected_store_add_rack"] = store_code
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     try:
@@ -436,10 +376,12 @@ async def add_rack_select_store(update: Update, context):
         return ADD_RACK_INPUT_NAMES
     except gspread_exceptions.WorksheetNotFound:
         await query.message.reply_text(f"Kode Toko {store_code} tidak ditemukan.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Gagal mendapatkan rak yang sudah ada: {e}")
         await query.message.reply_text("Terjadi kesalahan saat mengambil daftar rak. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
 async def add_rack_input_names(update: Update, context):
@@ -448,23 +390,25 @@ async def add_rack_input_names(update: Update, context):
     store_code = context.user_data.get("selected_store_add_rack")
     chat_id = update.effective_chat.id
 
-    if not store_code:
-        await update.message.reply_text("Kesalahan: Kode toko tidak ditemukan dalam konteks.")
-        return ConversationHandler.END
-
-    rack_names = re.split(r'[,.]', rack_names_input)
-    rack_names = [name.strip().replace(" ", "_") for name in rack_names if name.strip()] # Clean and replace spaces with underscores
-
-    if not rack_names:
-        await update.message.reply_text("Silakan masukan nama rak yang valid.")
-        return ADD_RACK_INPUT_NAMES
-
-    spreadsheet = get_spreadsheet()
-    if not spreadsheet:
-        await update.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
-        return ConversationHandler.END
-
     try:
+        if not store_code:
+            await update.message.reply_text("Kesalahan: Kode toko tidak ditemukan dalam konteks.")
+            await _return_to_main_menu(context, chat_id)
+            return ConversationHandler.END
+
+        rack_names = re.split(r'[,.]', rack_names_input)
+        rack_names = [name.strip().replace(" ", "_") for name in rack_names if name.strip()] # Clean and replace spaces with underscores
+
+        if not rack_names:
+            await update.message.reply_text("Silakan masukan nama rak yang valid.")
+            return ADD_RACK_INPUT_NAMES
+
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            await update.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+            await _return_to_main_menu(context, chat_id)
+            return ConversationHandler.END
+
         worksheet = spreadsheet.worksheet(store_code)
         existing_named_ranges = worksheet.get_named_ranges()
         existing_rack_names = {nr.name for nr in existing_named_ranges}
@@ -534,28 +478,7 @@ async def add_rack_input_names(update: Update, context):
         await update.message.reply_text("Terjadi kesalahan saat menambahkan rak. Silakan coba lagi.")
     finally:
         context.user_data.pop("selected_store_add_rack", None)
-        # Kembali ke menu utama setelah operasi selesai
-        keyboard = [
-            [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-            [
-                InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-                InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-            ],
-            [
-                InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-                InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-            ],
-            [
-                InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-                InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Silahkan pilih opsi dari menu:",
-            reply_markup=reply_markup,
-        )
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
 # --- Hapus Rak Handlers ---
@@ -565,15 +488,18 @@ async def delete_rack_start(update: Update, context):
     """Memulai proses penghapusan rak."""
     query = update.callback_query
     await query.answer()
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     sheet_titles = get_filtered_sheet_titles(spreadsheet)
     if not sheet_titles:
         await query.message.reply_text("Tidak ada kode toko yang tersedia untuk dihapus rak.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     buttons = [InlineKeyboardButton(title, callback_data=f"select_store_delete_rack_{title}") for title in sheet_titles]
@@ -588,10 +514,12 @@ async def delete_rack_select_store(update: Update, context):
     await query.answer()
     store_code = query.data.replace("select_store_delete_rack_", "")
     context.user_data["selected_store_delete_rack"] = store_code
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     try:
@@ -601,6 +529,7 @@ async def delete_rack_select_store(update: Update, context):
 
         if not existing_racks:
             await query.message.reply_text(f"Tidak ada rak yang tersedia di {store_code} untuk dihapus.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         message_text = f"{store_code}\n" + "\t".join(existing_racks)
@@ -611,10 +540,12 @@ async def delete_rack_select_store(update: Update, context):
         return DELETE_RACK_SELECT_RACKS
     except gspread_exceptions.WorksheetNotFound:
         await query.message.reply_text(f"Kode Toko {store_code} tidak ditemukan.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Gagal mendapatkan rak yang sudah ada: {e}")
         await query.message.reply_text("Terjadi kesalahan saat mengambil daftar rak. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
 async def delete_rack_select_racks(update: Update, context):
@@ -625,6 +556,7 @@ async def delete_rack_select_racks(update: Update, context):
 
     if not store_code:
         await update.message.reply_text("Kesalahan: Kode toko tidak ditemukan dalam konteks.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     rack_names = re.split(r'[,.]', rack_names_input)
@@ -662,12 +594,14 @@ async def delete_rack_confirm(update: Update, context):
 
     if not store_code or not racks_to_delete:
         await query.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     if choice == "confirm_delete_rack_yes":
         spreadsheet = get_spreadsheet()
         if not spreadsheet:
             await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         try:
@@ -688,10 +622,6 @@ async def delete_rack_confirm(update: Update, context):
                     worksheet.delete_named_range(named_range_obj.id)
                     
                     # Clear the content of the cells covered by the named range
-                    # Note: gspread's clear() method can be used on a range
-                    # However, to truly "delete" the table, we would need to delete rows/columns,
-                    # which can affect other data. For now, we will just clear the content
-                    # and remove the named range.
                     worksheet.clear(range_name)
                     deleted_racks.append(rack_name)
                 else:
@@ -710,33 +640,14 @@ async def delete_rack_confirm(update: Update, context):
         except Exception as e:
             logger.error(f"Gagal menghapus rak di toko {store_code}: {e}")
             await query.message.reply_text("Terjadi kesalahan saat menghapus rak. Silakan coba lagi.")
+        finally: # Ini adalah blok finally yang hilang
+            pass # Tidak ada cleanup spesifik di sini, hanya untuk memenuhi sintaks
     else:
         await query.message.reply_text("Batal Menghapus Rak")
 
     context.user_data.pop("selected_store_delete_rack", None)
     context.user_data.pop("racks_to_delete", None)
-    # Kembali ke menu utama setelah operasi selesai
-    keyboard = [
-        [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [
-            InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-            InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-            InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-        ],
-        [
-                InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-                InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Silahkan pilih opsi dari menu:",
-        reply_markup=reply_markup,
-    )
+    await _return_to_main_menu(context, chat_id)
     return ConversationHandler.END
 
 # --- Tambah Plu Handlers ---
@@ -746,15 +657,18 @@ async def add_plu_start(update: Update, context):
     """Memulai proses penambahan PLU."""
     query = update.callback_query
     await query.answer()
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     sheet_titles = get_filtered_sheet_titles(spreadsheet)
     if not sheet_titles:
         await query.message.reply_text("Tidak ada kode toko yang tersedia untuk ditambahkan PLU.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     buttons = [InlineKeyboardButton(title, callback_data=f"select_store_add_plu_{title}") for title in sheet_titles]
@@ -769,10 +683,12 @@ async def add_plu_select_store(update: Update, context):
     await query.answer()
     store_code = query.data.replace("select_store_add_plu_", "")
     context.user_data["selected_store_add_plu"] = store_code
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     try:
@@ -782,6 +698,7 @@ async def add_plu_select_store(update: Update, context):
 
         if not existing_racks:
             await query.message.reply_text(f"Tidak ada rak yang tersedia di {store_code} untuk ditambahkan PLU.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         buttons = [InlineKeyboardButton(rack_name, callback_data=f"select_rack_add_plu_{rack_name}") for rack_name in existing_racks]
@@ -790,10 +707,12 @@ async def add_plu_select_store(update: Update, context):
         return ADD_PLU_SELECT_RACK
     except gspread_exceptions.WorksheetNotFound:
         await query.message.reply_text(f"Kode Toko {store_code} tidak ditemukan.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Gagal mendapatkan rak yang sudah ada: {e}")
         await query.message.reply_text("Terjadi kesalahan saat mengambil daftar rak. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
 @clear_previous_message
@@ -816,24 +735,26 @@ async def add_plu_input_data(update: Update, context):
     rack_name = context.user_data.get("selected_rack_add_plu")
     chat_id = update.effective_chat.id
 
-    if not store_code or not rack_name:
-        await update.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan dalam konteks.")
-        return ConversationHandler.END
-
-    # Split PLU input by various delimiters
-    plu_list = re.split(r'[\s,.]|\n', plu_input)
-    plu_list = [p.strip() for p in plu_list if p.strip()]
-
-    if len(plu_list) < 2:
-        await update.message.reply_text("Silakan masukan minimal 2 data PLU.")
-        return ADD_PLU_INPUT_DATA
-
-    spreadsheet = get_spreadsheet()
-    if not spreadsheet:
-        await update.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
-        return ConversationHandler.END
-
     try:
+        if not store_code or not rack_name:
+            await update.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan dalam konteks.")
+            await _return_to_main_menu(context, chat_id)
+            return ConversationHandler.END
+
+        # Split PLU input by various delimiters
+        plu_list = re.split(r'[\s,.]|\n', plu_input)
+        plu_list = [p.strip() for p in plu_list if p.strip()]
+
+        if len(plu_list) < 2:
+            await update.message.reply_text("Silakan masukan minimal 2 data PLU.")
+            return ADD_PLU_INPUT_DATA
+
+        spreadsheet = get_spreadsheet()
+        if not spreadsheet:
+            await update.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+            await _return_to_main_menu(context, chat_id)
+            return ConversationHandler.END
+
         worksheet = spreadsheet.worksheet(store_code)
         
         # Get the named range object for the rack
@@ -842,6 +763,7 @@ async def add_plu_input_data(update: Update, context):
 
         if not rack_named_range:
             await update.message.reply_text(f"Rak '{rack_name}' tidak ditemukan di toko '{store_code}'.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         # Get the current values in the rack's PLU column (column A of the named range)
@@ -851,6 +773,7 @@ async def add_plu_input_data(update: Update, context):
         match = re.match(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', rack_range_str)
         if not match:
             await update.message.reply_text(f"Gagal mengurai rentang rak: {rack_range_str}")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
         
         start_col_letter, start_row, end_col_letter, end_row = match.groups()
@@ -879,42 +802,28 @@ async def add_plu_input_data(update: Update, context):
 
         if values_to_append:
             # Find the first empty row below the existing data in the rack
-            # This is a bit tricky with named ranges. A simpler approach is to append to the sheet
-            # and then update the named range to include the new rows.
-            # Or, we can find the last used row in the specific column of the rack.
-            
-            # Let's find the actual last row in the named range's first column (PLU column)
             plu_column_values = worksheet.col_values(1, value_render_option='UNFORMATTED_VALUE')
-            # Find the actual row number of the last non-empty cell in the PLU column
             last_plu_row = start_row # Start from the header row
             for i in range(start_row -1, len(plu_column_values)): # Iterate from 0-indexed values
                 if plu_column_values[i].strip():
                     last_plu_row = i + 1 # Convert to 1-indexed row number
             
-            # The row to start appending new data is last_plu_row + 1
             append_start_row = last_plu_row + 1
 
             # Update the sheet with new PLU data
             worksheet.update(f'A{append_start_row}', values_to_append)
 
             # Re-fetch the named range to update its extent to include new rows
-            # This is crucial for formulas to apply correctly and for the named range to reflect the new data.
-            # We need to calculate the new end row for the named range.
             new_end_row = append_start_row + len(values_to_append) - 1
             
             # Update the named range to cover the new data.
-            # This requires deleting the old named range and creating a new one.
             worksheet.delete_named_range(rack_named_range.id)
             worksheet.add_named_range(f'{store_code}!A{start_row}:{end_col_letter}{new_end_row}', rack_name)
-
 
         response_message = ""
         if new_plu_data:
             response_message += f"Berhasil Menambahkan Plu Ke {rack_name} di toko {store_code}:\n"
             response_message += "Plu\t\tNama Barang\n"
-            # To get Nama Barang, we'd need to read the sheet again after formulas are applied.
-            # This is a bit complex for a single message, as it depends on external 'produk' range.
-            # For simplicity, I'll just list the PLUs added.
             for plu in new_plu_data:
                 response_message += f"{plu}\t\t[text]\n" # Placeholder as per requirement
         
@@ -934,28 +843,7 @@ async def add_plu_input_data(update: Update, context):
     finally:
         context.user_data.pop("selected_store_add_plu", None)
         context.user_data.pop("selected_rack_add_plu", None)
-        # Kembali ke menu utama setelah operasi selesai
-        keyboard = [
-            [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-            [
-                InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-                InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-            ],
-            [
-                InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-                InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-            ],
-            [
-                InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-                InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Silahkan pilih opsi dari menu:",
-            reply_markup=reply_markup,
-        )
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
 # --- Hapus Plu Handlers ---
@@ -965,15 +853,18 @@ async def delete_plu_start(update: Update, context):
     """Memulai proses penghapusan PLU."""
     query = update.callback_query
     await query.answer()
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     sheet_titles = get_filtered_sheet_titles(spreadsheet)
     if not sheet_titles:
         await query.message.reply_text("Tidak ada kode toko yang tersedia untuk dihapus PLU.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     buttons = [InlineKeyboardButton(title, callback_data=f"select_store_delete_plu_{title}") for title in sheet_titles]
@@ -988,10 +879,12 @@ async def delete_plu_select_store(update: Update, context):
     await query.answer()
     store_code = query.data.replace("select_store_delete_plu_", "")
     context.user_data["selected_store_delete_plu"] = store_code
+    chat_id = update.effective_chat.id
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     try:
@@ -1001,6 +894,7 @@ async def delete_plu_select_store(update: Update, context):
 
         if not existing_racks:
             await query.message.reply_text(f"Tidak ada rak yang tersedia di {store_code} untuk dihapus PLU.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         buttons = [InlineKeyboardButton(rack_name, callback_data=f"select_rack_delete_plu_{rack_name}") for rack_name in existing_racks]
@@ -1010,10 +904,12 @@ async def delete_plu_select_store(update: Update, context):
 
     except gspread_exceptions.WorksheetNotFound:
         await query.message.reply_text(f"Kode Toko {store_code} tidak ditemukan.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Gagal mendapatkan rak yang sudah ada: {e}")
         await query.message.reply_text("Terjadi kesalahan saat mengambil daftar rak. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
 @clear_previous_message
@@ -1024,14 +920,17 @@ async def delete_plu_select_rack(update: Update, context):
     rack_name = query.data.replace("select_rack_delete_plu_", "")
     context.user_data["selected_rack_delete_plu"] = rack_name
     store_code = context.user_data.get("selected_store_delete_plu")
+    chat_id = update.effective_chat.id
 
     if not store_code or not rack_name:
         await query.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan dalam konteks.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     spreadsheet = get_spreadsheet()
     if not spreadsheet:
         await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     try:
@@ -1041,14 +940,15 @@ async def delete_plu_select_rack(update: Update, context):
 
         if not rack_named_range:
             await query.message.reply_text(f"Rak '{rack_name}' tidak ditemukan di toko '{store_code}'.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         # Get all values from the named range
-        # Assuming the named range covers the entire table including headers
         range_values = worksheet.get_values(rack_named_range.range)
         
         if not range_values or len(range_values) < 2: # No header or no data
             await query.message.reply_text(f"Tidak ada data PLU di rak '{rack_name}'.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         # Extract PLU and Nama Barang from the data rows
@@ -1074,6 +974,7 @@ async def delete_plu_input_data(update: Update, context):
 
     if not store_code or not rack_name:
         await update.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan dalam konteks.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     plu_list_to_delete = re.split(r'[\s,.]|\n', plu_input)
@@ -1112,12 +1013,14 @@ async def delete_plu_confirm(update: Update, context):
 
     if not store_code or not rack_name or not plu_list_to_delete:
         await query.message.reply_text("Kesalahan: Informasi toko, rak, atau PLU tidak ditemukan.")
+        await _return_to_main_menu(context, chat_id)
         return ConversationHandler.END
 
     if choice == "confirm_delete_plu_yes":
         spreadsheet = get_spreadsheet()
         if not spreadsheet:
             await query.message.reply_text("Terjadi kesalahan saat mengakses spreadsheet. Silakan coba lagi.")
+            await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
         try:
@@ -1127,6 +1030,7 @@ async def delete_plu_confirm(update: Update, context):
 
             if not rack_named_range:
                 await query.message.reply_text(f"Rak '{rack_name}' tidak ditemukan di toko '{store_code}'.")
+                await _return_to_main_menu(context, chat_id)
                 return ConversationHandler.END
 
             # Get all values from the named range
@@ -1134,6 +1038,7 @@ async def delete_plu_confirm(update: Update, context):
             
             if not range_values or len(range_values) < 2:
                 await query.message.reply_text(f"Tidak ada data PLU di rak '{rack_name}' untuk dihapus.")
+                await _return_to_main_menu(context, chat_id)
                 return ConversationHandler.END
 
             header_row = range_values[0]
@@ -1141,12 +1046,12 @@ async def delete_plu_confirm(update: Update, context):
 
             plu_found_and_deleted = []
             plu_not_found = []
-            updated_data_rows = []
             
             # Find the actual start row of the named range in the sheet
             match = re.match(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', rack_named_range.range)
             if not match:
                 await query.message.reply_text(f"Gagal mengurai rentang rak: {rack_named_range.range}")
+                await _return_to_main_menu(context, chat_id)
                 return ConversationHandler.END
             
             start_row_in_sheet = int(match.groups()[1])
@@ -1158,8 +1063,8 @@ async def delete_plu_confirm(update: Update, context):
                 if plu_in_row in plu_list_to_delete:
                     plu_found_and_deleted.append(plu_in_row)
                     rows_to_clear_indices.append(i) # Mark for clearing
-                else:
-                    updated_data_rows.append(row)
+                # else: # Baris ini tidak diperlukan karena updated_data_rows tidak digunakan
+                #     updated_data_rows.append(row)
 
             # Identify PLUs that were requested but not found
             for requested_plu in plu_list_to_delete:
@@ -1168,20 +1073,14 @@ async def delete_plu_confirm(update: Update, context):
 
             if rows_to_clear_indices:
                 # Clear the content of the rows that contain the PLUs to be deleted
-                # We need to calculate the actual sheet row numbers
                 cells_to_clear = []
                 for idx in rows_to_clear_indices:
                     sheet_row_num = start_row_in_sheet + 1 + idx # +1 for header, +idx for data row offset
-                    # Assuming the table has 3 columns (A, B, C)
                     cells_to_clear.append(f'A{sheet_row_num}:C{sheet_row_num}')
                 
                 # Batch clear the cells
                 for cell_range in cells_to_clear:
                     worksheet.clear(cell_range)
-                
-                # Optional: Sort the remaining data to fill gaps if desired.
-                # This can be complex if there are multiple tables.
-                # For simplicity, we'll just clear the cells.
                 
                 response_message = "Berhasil Menghapus Plu:\n" + "\n".join(plu_found_and_deleted)
             else:
@@ -1197,34 +1096,15 @@ async def delete_plu_confirm(update: Update, context):
         except Exception as e:
             logger.error(f"Gagal menghapus PLU di rak {rack_name} toko {store_code}: {e}")
             await query.message.reply_text("Terjadi kesalahan saat menghapus PLU. Silakan coba lagi.")
+        finally: # Ini adalah blok finally yang hilang yang menyebabkan SyntaxError
+            pass # Tidak ada cleanup spesifik di sini, hanya untuk memenuhi sintaks Python
     else:
         await query.message.reply_text("Batal Menghapus Plu")
 
     context.user_data.pop("selected_store_delete_plu", None)
     context.user_data.pop("selected_rack_delete_plu", None)
     context.user_data.pop("plu_to_delete", None)
-    # Kembali ke menu utama setelah operasi selesai
-    keyboard = [
-        [InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL))],
-        [
-            InlineKeyboardButton("Tambah Toko", callback_data="add_store"),
-            InlineKeyboardButton("Hapus Toko", callback_data="delete_store"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Rak", callback_data="add_rack"),
-            InlineKeyboardButton("Hapus Rak", callback_data="delete_rack"),
-        ],
-        [
-            InlineKeyboardButton("Tambah Plu", callback_data="add_plu"),
-            InlineKeyboardButton("Hapus Plu", callback_data="delete_plu"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Silahkan pilih opsi dari menu:",
-        reply_markup=reply_markup,
-    )
+    await _return_to_main_menu(context, chat_id)
     return ConversationHandler.END
 
 def main():
@@ -1388,10 +1268,6 @@ def main():
         port=PORT,
         url_path=TOKEN,
         webhook_url=f"https://{WEB_APP_URL.split('//')[1].split('/')[0]}/{TOKEN}", # Construct webhook URL from WEB_APP_URL
-        # We need to ensure the WEB_APP_URL is the base URL for the Render service
-        # and append the token as the path.
-        # Example: if WEB_APP_URL is https://my-render-app.onrender.com/index.php
-        # then webhook_url should be https://my-render-app.onrender.com/<TOKEN>
     )
 
 if __name__ == "__main__":
