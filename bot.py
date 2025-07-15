@@ -735,6 +735,7 @@ async def add_plu_input_data(update: Update, context):
     rack_name = context.user_data.get("selected_rack_add_plu")
     chat_id = update.effective_chat.id
 
+    
     try:
         if not store_code or not rack_name:
             await update.message.reply_text("Kesalahan: Informasi toko atau rak tidak ditemukan dalam konteks.")
@@ -1023,6 +1024,7 @@ async def delete_plu_confirm(update: Update, context):
             await _return_to_main_menu(context, chat_id)
             return ConversationHandler.END
 
+        
         try:
             worksheet = spreadsheet.worksheet(store_code)
             named_ranges = worksheet.get_named_ranges()
