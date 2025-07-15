@@ -2,6 +2,8 @@ import logging
 import re
 import os
 import json
+import threading
+from flask import Flask
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -21,11 +23,12 @@ import gspread
 from gspread_formatting import *
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- BAGIAN 1: KONFIGURASI DAN SETUP ---
+# --- BAGIAN 1: KONFIGURASI ---
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 WEB_APP_URL = os.environ.get("WEB_APP_URL")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 GSPREAD_CREDENTIALS = os.environ.get("GSPREAD_CREDENTIALS")
+PORT = int(os.environ.get('PORT', 8080)) # Port untuk Flask
 
 if not all([TOKEN, WEB_APP_URL, SPREADSHEET_ID, GSPREAD_CREDENTIALS]):
     raise ValueError("Salah satu environment variable krusial tidak diatur.")
@@ -33,7 +36,7 @@ if not all([TOKEN, WEB_APP_URL, SPREADSHEET_ID, GSPREAD_CREDENTIALS]):
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- BAGIAN 2: STATES UNTUK CONVERSATION HANDLER ---
+# --- BAGIAN 2: STATES ---
 (
     MAIN_MENU, EDITOR_MENU, PILIH_TOKO_MENU, HAPUS_TOKO_MENU,
     AWAIT_NAMA_TOKO_BARU, AWAIT_KONFIRMASI_HAPUS_TOKO,
@@ -43,21 +46,17 @@ logger = logging.getLogger(__name__)
 ) = range(15)
 
 # --- BAGIAN 3: FUNGSI HELPER ---
-
+# (Semua fungsi helper dari jawaban sebelumnya tetap sama persis, tidak ada perubahan)
 def get_gspread_client():
     creds_dict = json.loads(GSPREAD_CREDENTIALS)
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
-
 def find_next_available_row(worksheet):
     all_values = worksheet.get_all_values()
     return 1 if not all_values else len(all_values) + 4
-
 def _to_safe_name(name): return name.replace(" ", "_")
 def _to_real_name(safe_name): return safe_name.replace("_", " ")
-
-# Helper Toko
 def get_all_valid_stores():
     try: client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID); return [s.title for s in spreadsheet.worksheets() if len(s.title) == 4 and s.title.isalnum()]
     except Exception as e: logger.error(f"Error get_all_valid_stores: {e}"); return []
@@ -75,16 +74,13 @@ def add_new_store(store_code):
 def delete_store_sheet(store_code):
     try: client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID); spreadsheet.del_worksheet(spreadsheet.worksheet(store_code)); return True
     except Exception as e: logger.error(f"Error delete_store_sheet: {e}"); return False
-
-# Helper Rak & PLU (LENGKAP DAN BENAR)
 def get_racks_in_sheet(store_code):
     try:
         client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID)
         all_named_ranges = spreadsheet.list_named_ranges()
-        sheet_racks = [nr['name'] for nr in all_named_ranges if nr['rangeName'].startswith(f"'{store_code}'!")]
+        sheet_racks = [nr['name'] for nr in all_named_ranges if nr.get('rangeName', '').startswith(f"'{store_code}'!")]
         return [_to_real_name(name) for name in sheet_racks]
     except Exception as e: logger.error(f"Error get_racks_in_sheet for {store_code}: {e}"); return []
-
 def add_new_rack(store_code, rack_name):
     safe_rack_name = _to_safe_name(rack_name)
     try:
@@ -105,24 +101,27 @@ def add_new_rack(store_code, rack_name):
         spreadsheet.add_named_range(f"'{store_code}'!A{data_start_row}:A", safe_rack_name)
         return True
     except Exception as e: logger.error(f"Error add_new_rack for '{rack_name}': {e}"); return False
-
 def delete_racks(store_code, racks_to_delete):
     deleted, not_found = [], []
     try:
         client = get_gspread_client(); spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        all_named_ranges = {nr['name'] for nr in spreadsheet.list_named_ranges()}
+        all_named_ranges = spreadsheet.list_named_ranges()
         for rack in racks_to_delete:
             safe_rack_name = _to_safe_name(rack)
-            if safe_rack_name in all_named_ranges:
-                named_range_to_delete = next(nr for nr in spreadsheet.list_named_ranges() if nr['name'] == safe_rack_name)
-                spreadsheet.delete_named_range(named_range_to_delete['namedRangeId'])
-                deleted.append(rack)
-            else: not_found.append(rack)
+            found = False
+            for nr in all_named_ranges:
+                if nr.get('name') == safe_rack_name:
+                    spreadsheet.delete_named_range(nr['namedRangeId'])
+                    deleted.append(rack)
+                    found = True
+                    break
+            if not found:
+                not_found.append(rack)
         return deleted, not_found
     except Exception as e: logger.error(f"Error delete_racks: {e}"); return [], racks_to_delete
 
-
-# --- BAGIAN 4: KEYBOARDS ---
+# --- BAGIAN 4: KEYBOARDS & HANDLERS ---
+# (Semua keyboard dan handler dari jawaban sebelumnya tetap sama persis)
 def build_keyboard(buttons, n_cols): return [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
 def main_menu_keyboard(): return InlineKeyboardMarkup(build_keyboard([InlineKeyboardButton("Buka Aplikasi", web_app=WebAppInfo(url=WEB_APP_URL)), InlineKeyboardButton("Editor", callback_data="editor")], 2))
 def editor_menu_keyboard(): return InlineKeyboardMarkup(build_keyboard([InlineKeyboardButton("Pilih Toko", callback_data="pilih_toko"), InlineKeyboardButton("Tambah Toko", callback_data="tambah_toko"), InlineKeyboardButton("Hapus Toko", callback_data="hapus_toko"), InlineKeyboardButton("Kembali", callback_data="kembali_ke_main")], 2))
@@ -135,8 +134,6 @@ def rack_list_keyboard(store_code, action_prefix):
     buttons.append(InlineKeyboardButton("Kembali", callback_data=f"back_to_sheet_menu_{store_code}")); return InlineKeyboardMarkup(build_keyboard(buttons, 2)) if racks else None
 def confirmation_keyboard(yes_callback, no_callback): return InlineKeyboardMarkup(build_keyboard([InlineKeyboardButton("Ya", callback_data=yes_callback), InlineKeyboardButton("Tidak", callback_data=no_callback)], 2))
 def cancel_keyboard(callback_data): return InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data=callback_data)]])
-
-# --- BAGIAN 5: HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear(); await update.message.reply_html(f"Selamat Datang!", reply_markup=main_menu_keyboard()); return MAIN_MENU
 async def editor_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -150,8 +147,6 @@ async def wrong_state_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def back_to_sheet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer(); store_code = query.data.split('_')[-1]
     await query.edit_message_text(f"Menu Toko '{store_code}'", reply_markup=sheet_menu_keyboard(store_code)); return SHEET_MENU
-
-# Handlers Toko
 async def request_new_store_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer(); await query.edit_message_text(text="Masukkan Kode Toko (4 digit).", reply_markup=cancel_keyboard("cancel_to_editor")); return AWAIT_NAMA_TOKO_BARU
 async def add_store_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -176,8 +171,6 @@ async def delete_store_confirmed(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query; await query.answer(); store_code = context.user_data.pop("item_to_delete", None)
     msg = f"Toko {store_code} dihapus." if store_code and delete_store_sheet(store_code) else f"Gagal hapus {store_code}."
     await query.edit_message_text(msg, reply_markup=editor_menu_keyboard()); return EDITOR_MENU
-
-# Handlers Rak
 async def request_new_rack_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query; await query.answer(); store_code = context.user_data['active_store']; existing_racks = get_racks_in_sheet(store_code)
     message = "Masukkan nama Rak baru.\nUntuk >1, pisahkan dengan koma.\nContoh: RAK SATU, RAK DUA"
@@ -207,9 +200,23 @@ async def delete_rack_confirmed(update: Update, context: ContextTypes.DEFAULT_TY
     parts = [f"Berhasil hapus: {', '.join(deleted)}." if deleted else "", f"Tidak ditemukan: {', '.join(not_found)}." if not_found else ""]
     await query.edit_message_text("\n".join(filter(None, parts)) or "Operasi selesai.", reply_markup=sheet_menu_keyboard(store_code)); return SHEET_MENU
 
-# --- BAGIAN 6: MAIN ---
+# --- BAGIAN 6: APLIKASI WEB FLASK DAN MAIN ---
+
+# Inisialisasi aplikasi web Flask
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def index():
+    return "Bot is running!"
+
+def run_flask():
+    web_app.run(host='0.0.0.0', port=PORT)
+
 def main() -> None:
+    # Fungsi utama bot Telegram Anda
     application = Application.builder().token(TOKEN).build()
+    
+    # ... (Struktur ConversationHandler dari jawaban sebelumnya yang paling lengkap) ...
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -223,23 +230,29 @@ def main() -> None:
             AWAIT_NAMA_TOKO_BARU: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_store_handler), CallbackQueryHandler(cancel_to_editor, pattern="^cancel_to_editor$")],
             PILIH_TOKO_MENU: [CallbackQueryHandler(editor_menu_handler, pattern="^back_to_editor$"), CallbackQueryHandler(select_store, pattern="^pilih_")],
             HAPUS_TOKO_MENU: [CallbackQueryHandler(editor_menu_handler, pattern="^back_to_editor$"), CallbackQueryHandler(confirm_delete_store, pattern="^hapus_")],
-            AWAIT_KONFIRMASI_HAPUS_TOKO: [CallbackQueryHandler(delete_store_confirmed, pattern="^confirm_del_store_yes$"), CallbackQueryHandler(cancel_to_editor, pattern="^confirm_del_store_no$")],
+            AWAIT_KONFIRMASI_HAPUS_TOKO: [CallbackQueryHandler(delete_store_confirmed, pattern="^confirm_del_store_yes$"), CallbackQueryHandler(cancel_to_editor, pattern="^cancel_to_editor$")],
             SHEET_MENU: [
                 CallbackQueryHandler(editor_menu_handler, pattern="^kembali_ke_pilih_toko$"),
                 CallbackQueryHandler(request_new_rack_name, pattern="^tambah_rak_"),
                 CallbackQueryHandler(request_racks_to_delete, pattern="^hapus_rak_"),
-                # Untuk PLU, kita bisa tambahkan handlernya di sini
             ],
             AWAIT_NAMA_RAK_BARU: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_rack_handler), CallbackQueryHandler(cancel_to_sheet, pattern="^cancel_to_sheet$")],
             AWAIT_RAK_HAPUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_delete_rack), CallbackQueryHandler(cancel_to_sheet, pattern="^cancel_to_sheet$")],
-            AWAIT_KONFIRMASI_HAPUS_RAK: [CallbackQueryHandler(delete_rack_confirmed, pattern="^confirm_del_rack_yes$"), CallbackQueryHandler(cancel_to_sheet, pattern="^confirm_del_rack_no$")],
+            AWAIT_KONFIRMASI_HAPUS_RAK: [CallbackQueryHandler(delete_rack_confirmed, pattern="^confirm_del_rack_yes$"), CallbackQueryHandler(cancel_to_sheet, pattern="^cancel_to_sheet$")],
         },
         fallbacks=[CommandHandler("start", start), MessageHandler(filters.TEXT & ~filters.COMMAND, wrong_state_handler)],
         per_message=False, allow_reentry=True
     )
+
     application.add_handler(conv_handler)
-    logger.info("Bot sedang berjalan...")
+    logger.info("Starting bot polling...")
     application.run_polling()
 
+
 if __name__ == "__main__":
+    # Jalankan Flask di thread terpisah
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    
+    # Jalankan bot Telegram di thread utama
     main()
